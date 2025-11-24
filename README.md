@@ -7,3 +7,4 @@ best_model1.pth is the model that we used to present results in final writeup
 In dataset, the test and validation contain the same IDS, but the coordinates differ:
 Validation labels: have full or partial true (x,y,z)
 Test labels: do not exist — you predict everything.
+The validation_sequences_new.normalized.csv is just for visual comparison between predictions.csv. The DATASET.py will do normalization on dataset.
