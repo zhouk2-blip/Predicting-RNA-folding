@@ -9,6 +9,7 @@ import torch.nn as nn
 import numpy as np
 import matplotlib.pyplot as plt
 import os
+from kabsch import kabsch_align_batch
 EPOCHS = 40
 BATCH_SIZE = 32
 IR = 3e-4
@@ -24,6 +25,8 @@ def load_data():
     test_seqs = pd.read_csv('data/test_sequences.csv')
     train_labels = pd.read_csv('data/train_labels.csv')
     val_labels = pd.read_csv('data/validation_labels_new.csv')
+    train_pair_df = pd.read_csv("data/train_pair_features.csv")
+    val_pair_df = pd.read_csv("data/validation_pair_features.csv")
     return train_seqs, val_seqs, test_seqs, train_labels, val_labels
 
 def load_model(model_path):
@@ -76,6 +79,15 @@ def masked_mse_loss(pred,target,mask):
 #     tm_scores = compute_tm_score(pred,target,mask)
 #     correct = (tm_scores > threshold).float().mean().item()
 #     return correct
+def kabsch_mse_loss(pred, target, mask, raw_weight=0.3, aligned_weight=0.7):
+    aligned_pred = kabsch_align_batch(pred, target, mask)
+
+    raw_mse = masked_mse_loss(pred, target, mask)
+    aligned_mse = masked_mse_loss(aligned_pred, target, mask)
+
+    loss = raw_weight * raw_mse + aligned_weight * aligned_mse
+
+    return loss, aligned_pred
 
 def compute_accuracy(pred, target, mask, threshold=2):
     """
@@ -98,16 +110,16 @@ def compute_accuracy(pred, target, mask, threshold=2):
     return correct / total
 
 
-def train_validate(train,label,val,val_label,msa_dir,save_path = 'Trial/best_model2.pth', epochs = EPOCHS,batch_size = BATCH_SIZE,Ir = IR,max_len = MAX_LEN,patience = PATIENCE):
+def train_validate(train,label,val,val_label,msa_dir,train_pair_df,val_pair_df,save_path = 'Trial/best_model2.pth', epochs = EPOCHS,batch_size = BATCH_SIZE,Ir = IR,max_len = MAX_LEN,patience = PATIENCE):
     history  = {'epoch':[],'train_loss':[], 'val_loss':[], 'train_acc':[], 'val_acc':[]}
-    train_dataset = RNA(train,label,msa_dir,max_len=max_len)
+    train_dataset = RNA(train,label,msa_dir,pair_df=train_pair_df,max_len=max_len)
     train_loader = DataLoader(
         train_dataset,
         batch_size=batch_size, 
         shuffle = True,
         collate_fn=RNA.collate_fn, 
         )
-    val_dataset = RNA(val, val_label, msa_dir, max_len=max_len)
+    val_dataset = RNA(val, val_label, msa_dir, pair_df=val_pair_df, max_len=max_len)
     val_loader = DataLoader(
         val_dataset,
         batch_size=batch_size,
@@ -136,11 +148,11 @@ def train_validate(train,label,val,val_label,msa_dir,save_path = 'Trial/best_mod
             mask = mask.to(device)
             optimizer.zero_grad()
             outputs = model(feats,mask)
-            loss = masked_mse_loss(outputs, labels, mask)
+            loss, aligned_outputs = kabsch_mse_loss(outputs, labels, mask)
             loss.backward()
             optimizer.step()
             epoch_loss += loss.item()
-            acc = compute_accuracy(outputs, labels, mask, threshold=DISTANCE)
+            acc = compute_accuracy(aligned_outputs, labels, mask, threshold=DISTANCE)
             train_acc += acc
         avg_epoch_loss = epoch_loss / len(train_loader)
         avg_train_acc = train_acc / len(train_loader)
@@ -156,10 +168,10 @@ def train_validate(train,label,val,val_label,msa_dir,save_path = 'Trial/best_mod
                 labels = labels.to(device)
                 mask = mask.to(device)
                 outputs = model(feats,mask)
-                loss = masked_mse_loss(outputs, labels, mask)
+                loss, aligned_outputs = kabsch_mse_loss(outputs, labels, mask)
                 val_loss += loss.item()
                 
-                acc = compute_accuracy(outputs, labels, mask, threshold=DISTANCE)
+                acc = compute_accuracy(aligned_outputs, labels, mask, threshold=DISTANCE)
                 val_acc += acc
 
         avg_val_loss = val_loss / len(val_loader)
@@ -208,10 +220,9 @@ def train_validate(train,label,val,val_label,msa_dir,save_path = 'Trial/best_mod
 
 
 def main():
-    train_seqs, val_seqs, test_seqs, train_labels, val_labels = load_data()
+    train_seqs, val_seqs, test_seqs, train_labels, val_labels, train_pair_df, val_pair_df = load_data()
     msa_dir = "data2/MSA"
-    train_validate(train_seqs, train_labels, val_seqs, val_labels, msa_dir)
-    
+    train_validate(train_seqs, train_labels, val_seqs, val_labels, msa_dir, train_pair_df, val_pair_df)
 
 if __name__ == "__main__":
     main()

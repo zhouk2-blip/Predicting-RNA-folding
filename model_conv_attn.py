@@ -7,7 +7,7 @@ from torch.nn import functional as F
 class RNAmodel(nn.Module):
     def __init__(
             self,
-            input_channels = 6,
+            input_channels = 8,
             d_model =128,
             n_heads = 8,
             n_layers = 6,

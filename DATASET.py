@@ -9,11 +9,12 @@ from Bio import SeqIO
 from torch.nn import functional as F
 
 class RNADataset(Dataset):
-    def __init__(self, seq_df, label_df, msa_dir, max_len=256):
+    def __init__(self, seq_df, label_df, msa_dir, pair_df, max_len=256):
         self.seq_df = seq_df
         self.label_df = label_df
         self.msa_dir = msa_dir
         self.max_len = max_len
+        self.pair_df = pair_df
 
     def encode_sequence(self, seq):
         mapping = {'A':0,'C':1,'G':2,'U':3}
@@ -52,7 +53,22 @@ class RNADataset(Dataset):
             depth = depth / depth.max()
 
         return np.stack([conservation, depth], axis=1)
-    
+    def pair_features(self, target_id, L):
+        if self.pair_df is None:
+            return np.zeros((L, 2), dtype=np.float32)
+
+        row = self.pair_df[self.pair_df["target_id"] == target_id].sort_values("resid")
+
+        pair_feats = np.zeros((L, 2), dtype=np.float32)
+
+        if row.empty:
+            return pair_feats
+
+        row = row.iloc[:L]
+
+        pair_feats[:len(row), 0] = row["is_paired"].values.astype(np.float32)
+        pair_feats[:len(row), 1] = row["pair_partner_norm"].values.astype(np.float32)
+        return pair_feats
 
     def get_labels(self, target_id, L):
         if self.label_df is None:
@@ -95,8 +111,13 @@ class RNADataset(Dataset):
         # 2. MSA features
         msa = self.msa_features(target_id, L)    # (L,2)
 
-        # 3. concat → (L,6)
-        feats = np.concatenate([onehot, msa], axis=1)
+        # 3. pair features
+
+        pair_feats = self.pair_features(target_id, L)
+
+        # 3. concat → (L,8）
+        feats = np.concatenate([onehot, msa, pair_feats], axis=1)# (L,8)
+
 
         # 4. labels (coords)
         labels = self.get_labels(target_id, L)   # (L,3)
@@ -144,7 +165,7 @@ class RNADataset(Dataset):
 
     
     
-# feats:      (B, 6, L)   # input to model
+# feats:      (B, 8, L)   # input to model
 # labels:     (B, L, 3)   # target coordinates
 # final_mask: (B, L)      # 1 = valid, 0 = ignore
 # lengths:    list[int]
