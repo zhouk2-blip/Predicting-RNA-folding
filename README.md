@@ -8,3 +8,5 @@ In dataset, the test and validation contain the same IDS, but the coordinates di
 Validation labels: have full or partial true (x,y,z)
 Test labels: do not exist — you predict everything.
 The validation_sequences_new.normalized.csv is just for visual comparison between predictions.csv. The DATASET.py will do normalization on dataset.
+
+using SPOT-RNA-2D as external tool:https://github.com/jaswindersingh2/SPOT-RNA-2D
