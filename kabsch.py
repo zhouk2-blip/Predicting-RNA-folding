@@ -4,15 +4,14 @@ import torch
 
 
 def kabsch_align_single(P, Q, mask):
-    """
-    Align P to Q using Kabsch algorithm.
+    """Purpose: Align one predicted structure to one target structure.
 
-    P: (L, 3) predicted coordinates
-    Q: (L, 3) true coordinates
-    mask: (L,) 1 = valid residue, 0 = ignore
-
-    Returns:
-        P_aligned: (L, 3)
+    Input:
+        P: Predicted coordinates shaped (L, 3).
+        Q: Target coordinates shaped (L, 3).
+        mask: Valid-residue mask shaped (L,).
+    Output:
+        Kabsch-aligned predicted coordinates shaped (L, 3).
     """
 
     valid = mask.bool()
@@ -36,13 +35,12 @@ def kabsch_align_single(P, Q, mask):
     # SVD
     U, S, Vt = torch.linalg.svd(H)
 
-    # rotation
-    R = Vt.T @ U.T
-
-    # reflection correction
-    if torch.det(R) < 0:
-        Vt[-1, :] *= -1
-        R = Vt.T @ U.T
+    # rotation with reflection correction, avoiding in-place edits on SVD outputs
+    det = torch.det(Vt.T @ U.T)
+    correction = torch.ones(3, dtype=H.dtype, device=H.device)
+    correction[-1] = torch.sign(det)
+    D = torch.diag(correction)
+    R = Vt.T @ D @ U.T
 
     # apply alignment to all P, not just valid residues
     P_aligned = (P - P_mean) @ R + Q_mean
@@ -51,15 +49,14 @@ def kabsch_align_single(P, Q, mask):
 
 
 def kabsch_align_batch(pred, target, mask):
-    """
-    Batch version of Kabsch alignment.
+    """Purpose: Apply Kabsch alignment independently to each batch item.
 
-    pred: (B, L, 3)
-    target: (B, L, 3)
-    mask: (B, L)
-
-    Returns:
-        aligned_pred: (B, L, 3)
+    Input:
+        pred: Predicted coordinates shaped (B, L, 3).
+        target: Target coordinates shaped (B, L, 3).
+        mask: Valid-residue mask shaped (B, L).
+    Output:
+        Batch of aligned predicted coordinates shaped (B, L, 3).
     """
 
     aligned = []

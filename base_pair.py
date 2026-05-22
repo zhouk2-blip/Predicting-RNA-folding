@@ -2,16 +2,24 @@ import pandas as pd
 import numpy as np
 import RNA
 from tqdm import tqdm
+from argparse import ArgumentParser
+from pathlib import Path
+
+
+DATA_DIR = "dataset"
+DEFAULT_INPUT_CSV = Path(DATA_DIR) / "validation_sequences.csv"
+DEFAULT_STRUCTURE_OUTPUT = Path(DATA_DIR) / "validation_secondary_structures.csv"
+DEFAULT_PAIR_OUTPUT = Path(DATA_DIR) / "validation_pair_features.csv"
 
 
 def dotbracket_to_pairs(dotbracket):
-    """
-    Convert dot-bracket structure into partner index array.
+    """Purpose: Convert dot-bracket notation into partner indices.
 
-    Returns:
-        partner: np.array of shape (L,)
-                 partner[i] = paired position index, 0-based
-                 partner[i] = -1 if unpaired
+    Input:
+        dotbracket: ViennaRNA dot-bracket secondary-structure string.
+    Output:
+        NumPy array shaped (L,), where partner[i] is the paired 0-based index
+        or -1 when residue i is unpaired.
     """
     L = len(dotbracket)
     partner = np.full(L, -1, dtype=np.int64)
@@ -34,9 +42,13 @@ def dotbracket_to_pairs(dotbracket):
 
 
 def make_pair_features(target_id, sequence):
-    """
-    Use ViennaRNA to predict secondary structure,
-    then convert it into per-residue pair features.
+    """Purpose: Predict secondary structure and build per-residue pair features.
+
+    Input:
+        target_id: RNA target identifier.
+        sequence: RNA sequence string.
+    Output:
+        Tuple of (structure metadata row, per-residue feature rows).
     """
     sequence = sequence.upper().replace("T", "U")
 
@@ -79,8 +91,33 @@ def make_pair_features(target_id, sequence):
     return structure_row, rows
 
 
+def parse_args():
+    """Purpose: Parse command-line options for ViennaRNA pair-feature generation.
+
+    Input:
+        Command-line arguments.
+    Output:
+        argparse Namespace with input and output CSV paths.
+    """
+    parser = ArgumentParser(description="Generate ViennaRNA secondary-structure pair features.")
+    parser.add_argument("--input-csv", default=str(DEFAULT_INPUT_CSV))
+    parser.add_argument("--structure-output", default=str(DEFAULT_STRUCTURE_OUTPUT))
+    parser.add_argument("--pair-output", default=str(DEFAULT_PAIR_OUTPUT))
+    return parser.parse_args()
+
+
 def main():
-    input_csv = "project\\dataset\\validation_sequences.csv"
+    """Purpose: Generate ViennaRNA secondary-structure feature CSV files.
+
+    Input:
+        Command-line arguments parsed by parse_args().
+    Output:
+        Writes secondary-structure metadata and per-residue pair-feature CSVs.
+    """
+    args = parse_args()
+    input_csv = Path(args.input_csv)
+    structure_output = Path(args.structure_output)
+    pair_output = Path(args.pair_output)
 
     seq_df = pd.read_csv(input_csv)
 
@@ -99,11 +136,13 @@ def main():
     structure_df = pd.DataFrame(all_structure_rows)
     feature_df = pd.DataFrame(all_feature_rows)
 
-    structure_df.to_csv("train_secondary_structures.csv", index=False)
-    feature_df.to_csv("train_pair_features.csv", index=False)
+    structure_output.parent.mkdir(parents=True, exist_ok=True)
+    pair_output.parent.mkdir(parents=True, exist_ok=True)
+    structure_df.to_csv(structure_output, index=False)
+    feature_df.to_csv(pair_output, index=False)
 
-    print("Saved train_secondary_structures.csv")
-    print("Saved train_pair_features.csv")
+    print(f"Saved {structure_output}")
+    print(f"Saved {pair_output}")
 
 
 if __name__ == "__main__":
