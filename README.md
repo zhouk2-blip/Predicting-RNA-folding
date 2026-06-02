@@ -26,7 +26,7 @@ pip install torch pandas numpy biopython matplotlib pyyaml tqdm
 Optional dependencies are only needed when regenerating feature files:
 
 - ViennaRNA Python bindings are needed by `base_pair.py`.
-- SPOT-RNA-2D is needed only if you regenerate contact maps.
+- SPOT-RNA-2D is needed only if you regenerate contact maps. The external tool is needed; you need to use https://github.com/jaswindersingh2/SPOT-RNA-2D
 
 ## Data Layout
 
