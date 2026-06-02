@@ -1,0 +1,32 @@
+{
+  "removed_target_ids": [
+    "6N7R_R"
+  ],
+  "reason": "Removed because training sequence is 568 nt but existing MSA/SPOT inputs are 63 nt, producing a 63x63 SPOT map.",
+  "files": {
+    "train_sequences.csv": {
+      "exists": true,
+      "input_rows": 2776,
+      "output_rows": 2775,
+      "removed_rows": 1
+    },
+    "train_labels.csv": {
+      "exists": true,
+      "input_rows": 279434,
+      "output_rows": 278866,
+      "removed_rows": 568
+    },
+    "train_pair_features.csv": {
+      "exists": true,
+      "input_rows": 279434,
+      "output_rows": 278866,
+      "removed_rows": 568
+    },
+    "train_secondary_structures.csv": {
+      "exists": true,
+      "input_rows": 2776,
+      "output_rows": 2775,
+      "removed_rows": 1
+    }
+  }
+}

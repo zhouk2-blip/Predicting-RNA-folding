@@ -1,0 +1,47 @@
+{
+  "removed_target_ids": [
+    "1XNQ_X",
+    "4V75_A1",
+    "6GSL_1K",
+    "6GSL_1L",
+    "6N7R_R",
+    "6SNT_6",
+    "6T0S_V",
+    "6UZ7_8",
+    "6WB1_C",
+    "6XZP_IN1",
+    "6Y0C_IN1",
+    "7OB9_R",
+    "8PVK_C3",
+    "8R3V_X2",
+    "8RCT_Y1",
+    "9IS7_A"
+  ],
+  "reason": "Removed train targets whose MSA query or SPOT map does not cover train_max_len.",
+  "files": {
+    "train_sequences.csv": {
+      "exists": true,
+      "input_rows": 2776,
+      "output_rows": 2760,
+      "removed_rows": 16
+    },
+    "train_labels.csv": {
+      "exists": true,
+      "input_rows": 279434,
+      "output_rows": 277470,
+      "removed_rows": 1964
+    },
+    "train_pair_features.csv": {
+      "exists": true,
+      "input_rows": 279434,
+      "output_rows": 277470,
+      "removed_rows": 1964
+    },
+    "train_secondary_structures.csv": {
+      "exists": true,
+      "input_rows": 2776,
+      "output_rows": 2760,
+      "removed_rows": 16
+    }
+  }
+}

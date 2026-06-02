@@ -1,0 +1,53 @@
+{
+  "source_data_dir": "dataset_aug_le300",
+  "output_dir": "dataset_aug_le300_msa",
+  "msa_dir": "dataset_aug_le300\\MSA",
+  "source_train_targets": 3713,
+  "source_label_rows": 365400,
+  "msa_files": 3019,
+  "kept_train_targets": 2776,
+  "kept_label_rows": 279434,
+  "removed_missing_msa_targets": 937,
+  "copied_context_files": [
+    "validation_sequences.csv",
+    "validation_labels.csv",
+    "validation_pair_features.csv",
+    "test_sequences.csv"
+  ],
+  "optional_filtered_files": {
+    "train_pair_features.csv": {
+      "copied": true,
+      "filtered": true,
+      "input_rows": 137095,
+      "output_rows": 135397
+    },
+    "train_secondary_structures.csv": {
+      "copied": true,
+      "filtered": true,
+      "input_rows": 844,
+      "output_rows": 838
+    }
+  },
+  "sample_removed_target_ids": [
+    "1AQ4_S",
+    "1B01_E",
+    "1BZT_A",
+    "1C0A_B",
+    "1C0O_A",
+    "1D0T_A",
+    "1E8O_E",
+    "1EFW_C",
+    "1EI2_A",
+    "1EXD_B",
+    "1F27_A",
+    "1F79_A",
+    "1F7V_B",
+    "1F7Y_B",
+    "1FEQ_A",
+    "1FL8_A",
+    "1FUF_A",
+    "1FYP_A",
+    "1G1X_D",
+    "1G1X_I"
+  ]
+}
