@@ -10,40 +10,33 @@ import pandas as pd
 from tqdm import tqdm
 import numpy as np
 import matplotlib.pyplot as plt
+import yaml
 from argparse import ArgumentParser
 from kabsch import kabsch_align_batch
 
 DEVICE = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
-DATA_DIR = "dataset"
+DATA_DIR = "dataset_final"
 OUTPUT_ROOT = "output"
 MSA_DIR = os.path.join(DATA_DIR, "MSA")
 VAL_LABELS_PATH = "validation_labels_new.normalized.csv"
 RAW_VAL_LABELS_PATH = os.path.join(DATA_DIR, "validation_labels.csv")
 RUN_DIR_RE = re.compile(r"^output(\d+)$")
+FINETUNE_DIR_RE = re.compile(r"^Finetune_output(\d+)(?:_v(\d+))?(?:_run(\d+))?$")
+GRAPH_FINETUNE_DIR_RE = re.compile(r"^Graph_Finetune_output(\d+)(?:_v(\d+))?(?:_run(\d+))?$")
 
-def latest_output_dir(output_root=OUTPUT_ROOT):
-    """Purpose: Find the highest-numbered run directory.
+def is_run_dir_name(name):
+    """Purpose: Identify training and fine-tuning output directories.
 
     Input:
-        output_root: Parent directory containing output1, output2, ...
+        name: Directory basename.
     Output:
-        Path to the latest run directory, or None if no run exists.
+        True for outputN or Finetune_outputN-style directories.
     """
-    if not os.path.exists(output_root):
-        return None
-
-    runs = []
-    for name in os.listdir(output_root):
-        path = os.path.join(output_root, name)
-        match = RUN_DIR_RE.match(name)
-        if match and os.path.isdir(path):
-            runs.append((int(match.group(1)), path))
-
-    if not runs:
-        return None
-
-    runs.sort()
-    return runs[-1][1]
+    return (
+        RUN_DIR_RE.match(name) is not None
+        or FINETUNE_DIR_RE.match(name) is not None
+        or GRAPH_FINETUNE_DIR_RE.match(name) is not None
+    )
 
 def find_model_path(run_dir):
     """Purpose: Select a checkpoint from a run directory.
@@ -71,10 +64,10 @@ def find_model_path(run_dir):
     return candidates[0]
 
 def find_latest_model_path(output_root=OUTPUT_ROOT):
-    """Purpose: Find the newest checkpoint across numbered run directories.
+    """Purpose: Find the newest checkpoint across training and fine-tune runs.
 
     Input:
-        output_root: Parent directory containing output1, output2, ...
+        output_root: Parent directory containing outputN or Finetune_outputN runs.
     Output:
         Checkpoint path from the newest run directory that has a .pth file.
     """
@@ -84,9 +77,8 @@ def find_latest_model_path(output_root=OUTPUT_ROOT):
     runs = []
     for name in os.listdir(output_root):
         path = os.path.join(output_root, name)
-        match = RUN_DIR_RE.match(name)
-        if match and os.path.isdir(path):
-            runs.append((int(match.group(1)), path))
+        if is_run_dir_name(name) and os.path.isdir(path):
+            runs.append((os.path.getmtime(path), path))
 
     for _, run_dir in sorted(runs, reverse=True):
         try:
@@ -94,7 +86,38 @@ def find_latest_model_path(output_root=OUTPUT_ROOT):
         except FileNotFoundError:
             continue
 
-    raise FileNotFoundError(f"No .pth checkpoint found in {output_root}/outputN directories")
+    raise FileNotFoundError(f"No .pth checkpoint found in {output_root} run directories")
+
+def checkpoint_model_config(model_path):
+    """Purpose: Recover model reconstruction settings saved with a run config.
+
+    Input:
+        model_path: Path to a saved checkpoint inside a run directory.
+    Output:
+        Dictionary of RNAmodel keyword arguments that are not in the state_dict.
+    """
+    defaults = {
+        "spot_bias_scale": 1.0,
+        "use_graph": False,
+        "graph_layers": 0,
+        "graph_scale": 0.10,
+        "spot_edge_threshold": 0.50,
+        "spot_top_k": 8,
+        "local_edge_max_sep": 4,
+        "coord_refine_steps": 0,
+        "coord_refine_hidden": 128,
+        "coord_refine_dropout": 0.05,
+        "coord_refine_local_window": 4,
+        "coord_refine_delta_scale": 0.10,
+    }
+    config_path = os.path.join(os.path.dirname(model_path) or ".", "used_config.yaml")
+    if not os.path.exists(config_path):
+        return defaults
+
+    with open(config_path, "r", encoding="utf-8") as config_file:
+        config = yaml.safe_load(config_file) or {}
+    defaults.update(config.get("model", {}))
+    return defaults
 
 def load_model(model_path):
     """Purpose: Load a checkpoint and reconstruct the matching RNA model.
@@ -107,9 +130,32 @@ def load_model(model_path):
     state = torch.load(model_path, map_location=DEVICE)
     input_channels = state["conv_block.0.weight"].shape[1]
     max_len = state["pos_embed.weight"].shape[0]
-    model = RNAmodel(input_channels=input_channels, max_len=max_len).to(DEVICE)
+    model_config = checkpoint_model_config(model_path)
+    model = RNAmodel(
+        input_channels=input_channels,
+        max_len=max_len,
+        spot_bias_scale=model_config["spot_bias_scale"],
+        use_graph=model_config["use_graph"],
+        graph_layers=model_config["graph_layers"],
+        graph_scale=model_config["graph_scale"],
+        spot_edge_threshold=model_config["spot_edge_threshold"],
+        spot_top_k=model_config["spot_top_k"],
+        local_edge_max_sep=model_config["local_edge_max_sep"],
+        coord_refine_steps=model_config["coord_refine_steps"],
+        coord_refine_hidden=model_config["coord_refine_hidden"],
+        coord_refine_dropout=model_config["coord_refine_dropout"],
+        coord_refine_local_window=model_config["coord_refine_local_window"],
+        coord_refine_delta_scale=model_config["coord_refine_delta_scale"],
+    ).to(DEVICE)
     model.load_state_dict(state)
     model.eval()
+    print(
+        "Loaded model with "
+        f"SPOT attention bias scale={model_config['spot_bias_scale']}, "
+        f"use_graph={model_config['use_graph']}, "
+        f"graph_layers={model_config['graph_layers']}, "
+        f"coord_refine_steps={model_config['coord_refine_steps']}"
+    )
     return model, input_channels, max_len
 
 def masked_rmse(pred, target, mask, eps=1e-8):
@@ -204,6 +250,21 @@ def denormalize_coords(coords, mean, std):
         Denormalized coordinates shaped (L, 3).
     """
     return coords * std + mean
+
+def masked_rmse_numpy(pred, target, valid_mask):
+    """Purpose: Compute RMSE for denormalized coordinate diagnostics.
+
+    Input:
+        pred: Predicted coordinates shaped (L, 3).
+        target: Ground-truth coordinates shaped (L, 3).
+        valid_mask: Boolean valid-residue mask shaped (L,).
+    Output:
+        Float RMSE over valid residues, or NaN when no residues are valid.
+    """
+    if not valid_mask.any():
+        return np.nan
+    diff2 = (pred[valid_mask] - target[valid_mask]) ** 2
+    return float(np.sqrt(diff2.sum() / valid_mask.sum()))
 
 def plot_structure(pred_xyz, true_xyz, true_valid, title, path):
     """Purpose: Save a 3D plot comparing predicted and true structures.
@@ -333,27 +394,23 @@ def analyze_model_performance(model, val_loader, raw_label_df=None, out_dir=None
 
     print("\nGenerating 3D comparison plots...")
 
-    for batch_idx, (feats, labels, contact_map, mask, lengths, ids) in enumerate(
+    for batch_idx, (feats, labels, contact_map, seq_mask, coord_mask, lengths, ids) in enumerate(
         tqdm(val_loader, desc="Analyzing")
     ):
         feats = feats.to(DEVICE)
         labels = labels.to(DEVICE)
         contact_map = contact_map.to(DEVICE)
-        mask = mask.to(DEVICE)
+        seq_mask = seq_mask.to(DEVICE)
+        coord_mask = coord_mask.to(DEVICE)
 
         with torch.no_grad():
-            preds = model(feats, mask, contact_map=contact_map)              # (B, L, 3)
-            aligned_preds = kabsch_align_batch(preds, labels, mask)
-
-        diagnostic_rows.extend(
-            compactness_row(ids[b], preds[b], aligned_preds[b], labels[b], mask[b], lengths[b])
-            for b in range(len(ids))
-        )
+            preds = model(feats, seq_mask, contact_map=contact_map)              # (B, L, 3)
+            aligned_preds = kabsch_align_batch(preds, labels, coord_mask)
 
         preds_np = preds.cpu().numpy()
         aligned_np = aligned_preds.cpu().numpy()
         labels_np = labels.cpu().numpy()
-        valid_mask = mask.cpu().numpy().astype(bool)
+        valid_mask = coord_mask.cpu().numpy().astype(bool)
         rows.extend(coordinate_rows(ids, preds_np, lengths))
         if save_aligned:
             aligned_rows.extend(coordinate_rows(ids, aligned_np, lengths))
@@ -368,6 +425,16 @@ def analyze_model_performance(model, val_loader, raw_label_df=None, out_dir=None
             aligned_xyz = aligned_np[b, :L, :]
             true_xyz = labels_np[b, :L, :]
             true_valid = valid_mask[b, :L]
+            diagnostic_row = compactness_row(
+                target_id,
+                preds[b],
+                aligned_preds[b],
+                labels[b],
+                coord_mask[b],
+                L,
+            )
+            diagnostic_row["raw_rmse_angstrom"] = np.nan
+            diagnostic_row["aligned_rmse_angstrom"] = np.nan
 
             plot_structure(pred_xyz, true_xyz, true_valid, f"{target_id}: Raw Predicted vs True",
                            os.path.join(out_dir, f"{target_id}.png"))
@@ -376,21 +443,34 @@ def analyze_model_performance(model, val_loader, raw_label_df=None, out_dir=None
                                os.path.join(out_dir, f"{target_id}_aligned.png"))
             plot_prediction_only(pred_xyz, f"{target_id}: Raw Predicted Structure",
                                  os.path.join(out_dir, f"{target_id}raw.png"))
-            if raw_label_df is not None and save_aligned:
+            if raw_label_df is not None:
                 mean, std = label_normalization_stats(raw_label_df, target_id, L)
                 if mean is not None:
+                    raw_angstrom = denormalize_coords(pred_xyz, mean, std)
                     aligned_angstrom = denormalize_coords(aligned_xyz, mean, std)
                     true_angstrom = denormalize_coords(true_xyz, mean, std)
-                    aligned_angstrom_rows.extend(
-                        coordinate_rows([target_id], aligned_angstrom[np.newaxis, :, :], [L])
+                    diagnostic_row["raw_rmse_angstrom"] = masked_rmse_numpy(
+                        raw_angstrom,
+                        true_angstrom,
+                        true_valid,
                     )
-                    plot_structure(
+                    diagnostic_row["aligned_rmse_angstrom"] = masked_rmse_numpy(
                         aligned_angstrom,
                         true_angstrom,
                         true_valid,
-                        f"{target_id}: Aligned Predicted vs True (Angstrom)",
-                        os.path.join(out_dir, f"{target_id}_aligned_angstrom.png"),
                     )
+                    if save_aligned:
+                        aligned_angstrom_rows.extend(
+                            coordinate_rows([target_id], aligned_angstrom[np.newaxis, :, :], [L])
+                        )
+                        plot_structure(
+                            aligned_angstrom,
+                            true_angstrom,
+                            true_valid,
+                            f"{target_id}: Aligned Predicted vs True (Angstrom)",
+                            os.path.join(out_dir, f"{target_id}_aligned_angstrom.png"),
+                        )
+            diagnostic_rows.append(diagnostic_row)
     print("3D comparison plots saved in:", out_dir)
     print("3D predicted structure plots saved in:", out_dir)
 
@@ -404,11 +484,14 @@ def analyze_model_performance(model, val_loader, raw_label_df=None, out_dir=None
             "true_adj_median",
             "raw_rmse",
             "aligned_rmse",
+            "raw_rmse_angstrom",
+            "aligned_rmse_angstrom",
             "raw_acc@1.0",
             "aligned_acc@1.0",
         ]].mean(numeric_only=True).to_string())
 
     return pd.DataFrame(rows), pd.DataFrame(aligned_rows), pd.DataFrame(aligned_angstrom_rows), diagnostics
+
 def load_data():
     """Purpose: Load validation data needed for visualization.
 
@@ -424,6 +507,69 @@ def load_data():
     raw_val_labels = pd.read_csv(RAW_VAL_LABELS_PATH) if os.path.exists(RAW_VAL_LABELS_PATH) else val_labels
     val_pair_df = pd.read_csv(os.path.join(DATA_DIR, "validation_pair_features.csv"))
     return val_seqs, val_labels, raw_val_labels, val_pair_df
+
+
+def filter_validation_data_by_max_len(val_seqs, val_labels, raw_val_labels, val_pair_df, max_len):
+    """Purpose: Keep only validation targets whose original sequence length fits the model.
+
+    Input:
+        val_seqs: Validation sequence DataFrame with target_id and sequence columns.
+        val_labels: Normalized validation label DataFrame.
+        raw_val_labels: Raw Angstrom validation label DataFrame.
+        val_pair_df: Validation pair-feature DataFrame.
+        max_len: Maximum original sequence length allowed for prediction.
+    Output:
+        Tuple of filtered sequence, normalized label, raw label, pair-feature DataFrames, and a report dict.
+    """
+    lengths = val_seqs["sequence"].astype(str).str.len()
+    keep_mask = lengths <= int(max_len)
+    keep_ids = set(val_seqs.loc[keep_mask, "target_id"].astype(str))
+
+    def filter_label_rows(label_df):
+        if label_df is None or label_df.empty:
+            return label_df
+        target_ids = label_df["ID"].astype(str).str.rsplit("_", n=1).str[0]
+        return label_df[target_ids.isin(keep_ids)].copy()
+
+    def filter_pair_rows(pair_df):
+        if pair_df is None or pair_df.empty:
+            return pair_df
+        return pair_df[pair_df["target_id"].astype(str).isin(keep_ids)].copy()
+
+    filtered_seqs = val_seqs[keep_mask].copy()
+    report = {
+        "max_len": int(max_len),
+        "original_targets": int(len(val_seqs)),
+        "kept_targets": int(len(filtered_seqs)),
+        "removed_targets": int(len(val_seqs) - len(filtered_seqs)),
+        "removed_target_sample": val_seqs.loc[~keep_mask, "target_id"].astype(str).head(10).tolist(),
+    }
+    return (
+        filtered_seqs,
+        filter_label_rows(val_labels),
+        filter_label_rows(raw_val_labels),
+        filter_pair_rows(val_pair_df),
+        report,
+    )
+
+
+def print_validation_length_filter_report(report):
+    """Purpose: Print validation target length filtering summary.
+
+    Input:
+        report: Dictionary returned by filter_validation_data_by_max_len().
+    Output:
+        None. Writes a concise summary to stdout.
+    """
+    print(
+        "Validation length filtering: "
+        f"kept {report['kept_targets']}/{report['original_targets']} targets "
+        f"with original length <= {report['max_len']}; "
+        f"skipped {report['removed_targets']}."
+    )
+    if report["removed_target_sample"]:
+        print("Skipped long target sample:", ", ".join(report["removed_target_sample"]))
+
 
 def parse_args():
     """Purpose: Parse command-line options for visualization outputs.
@@ -470,13 +616,17 @@ def main():
     print(f"Writing visualization outputs to: {output_dir}")
     val_seqs, val_labels, raw_val_labels, val_pair_df = load_data()
     model, input_channels, model_max_len = load_model(args.model_path)
-    pair_df = val_pair_df if input_channels == 8 else None
-    original_val_count = len(val_seqs)
-    val_seqs = val_seqs[val_seqs["sequence"].str.len() <= model_max_len].copy()
-    print(
-        f"Filtered validation sequences by model max_len={model_max_len}: "
-        f"kept {len(val_seqs)}/{original_val_count}, skipped {original_val_count - len(val_seqs)}."
+    val_seqs, val_labels, raw_val_labels, val_pair_df, length_filter_report = (
+        filter_validation_data_by_max_len(
+            val_seqs,
+            val_labels,
+            raw_val_labels,
+            val_pair_df,
+            model_max_len,
+        )
     )
+    print_validation_length_filter_report(length_filter_report)
+    pair_df = val_pair_df if input_channels == 8 else None
     val_loader = DataLoader(
         RNA(val_seqs, val_labels, MSA_DIR, pair_df=pair_df, max_len=model_max_len, contact_map_dir=args.contact_map_dir),
         batch_size=4,

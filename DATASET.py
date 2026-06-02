@@ -16,7 +16,7 @@ class RNADataset(Dataset):
         msa_dir: Directory containing target_id.MSA.fasta files.
         pair_df: Optional ViennaRNA pair-feature DataFrame.
         max_len: Maximum sequence length to keep.
-        contact_map_dir: Optional directory of SPOT-RNA-2D .npy contact maps.
+        contact_map_dir: Optional directory, or ordered directories, of SPOT-RNA-2D .npy contact maps.
     Output:
         Dataset items consumed by training and visualization loaders.
     """
@@ -30,7 +30,7 @@ class RNADataset(Dataset):
             msa_dir: Directory of MSA FASTA files.
             pair_df: Optional ViennaRNA pair-feature DataFrame.
             max_len: Maximum residues to keep per target.
-            contact_map_dir: Optional SPOT contact-map directory.
+            contact_map_dir: Optional SPOT contact-map directory or fallback directories.
         Output:
             Initialized dataset object.
         """
@@ -39,7 +39,57 @@ class RNADataset(Dataset):
         self.msa_dir = msa_dir
         self.max_len = max_len
         self.pair_df = pair_df
-        self.contact_map_dir = contact_map_dir
+        self.contact_map_dirs = self._normalize_path_list(contact_map_dir)
+        self.label_groups = self._index_label_rows(label_df)
+        self.pair_groups = self._index_pair_rows(pair_df)
+
+    @staticmethod
+    def _normalize_path_list(paths):
+        """Purpose: Normalize an optional path or path sequence into a list.
+
+        Input:
+            paths: None, one filesystem path, or a sequence of filesystem paths.
+        Output:
+            List of non-empty path strings.
+        """
+        if paths is None:
+            return []
+        if isinstance(paths, (str, os.PathLike)):
+            return [os.fspath(paths)] if str(paths).strip() else []
+        return [os.fspath(path) for path in paths if str(path).strip()]
+
+    @staticmethod
+    def _index_label_rows(label_df):
+        """Purpose: Group coordinate-label rows by target ID for fast lookup.
+
+        Input:
+            label_df: Label DataFrame with an ID column, or None.
+        Output:
+            Dictionary mapping target_id to label rows.
+        """
+        if label_df is None or label_df.empty:
+            return {}
+        target_ids = label_df["ID"].astype(str).str.rsplit("_", n=1).str[0]
+        return {
+            target_id: label_df.loc[target_ids == target_id]
+            for target_id in target_ids.unique()
+        }
+
+    @staticmethod
+    def _index_pair_rows(pair_df):
+        """Purpose: Group per-residue pair features by target ID for fast lookup.
+
+        Input:
+            pair_df: Pair-feature DataFrame with target_id and resid columns, or None.
+        Output:
+            Dictionary mapping target_id to sorted pair-feature rows.
+        """
+        if pair_df is None or pair_df.empty:
+            return {}
+        return {
+            target_id: group.sort_values("resid")
+            for target_id, group in pair_df.groupby("target_id", sort=False)
+        }
 
     def encode_sequence(self, seq):
         """Purpose: Convert an RNA sequence into nucleotide one-hot features.
@@ -106,11 +156,10 @@ class RNADataset(Dataset):
         if self.pair_df is None:
             return np.zeros((L, 0), dtype=np.float32)
 
-        row = self.pair_df[self.pair_df["target_id"] == target_id].sort_values("resid")
-
         pair_feats = np.zeros((L, 2), dtype=np.float32)
+        row = self.pair_groups.get(target_id)
 
-        if row.empty:
+        if row is None or row.empty:
             return pair_feats
 
         row = row.iloc[:L]
@@ -129,11 +178,13 @@ class RNADataset(Dataset):
             Float array shaped (L, L) with contact probabilities.
         """
         contact = np.zeros((L, L), dtype=np.float32)
-        if self.contact_map_dir is None:
-            return contact
-
-        map_path = os.path.join(self.contact_map_dir, f"{target_id}.npy")
-        if not os.path.exists(map_path):
+        map_path = None
+        for contact_map_dir in self.contact_map_dirs:
+            candidate_path = os.path.join(contact_map_dir, f"{target_id}.npy")
+            if os.path.exists(candidate_path):
+                map_path = candidate_path
+                break
+        if map_path is None:
             return contact
 
         loaded = np.load(map_path).astype(np.float32)
@@ -156,9 +207,9 @@ class RNADataset(Dataset):
         """
         if self.label_df is None:
             return np.full((L,3), np.nan, dtype=np.float32)
-        row = self.label_df[self.label_df['ID'].str.startswith(target_id+'_')]
+        row = self.label_groups.get(target_id)
         coords = np.full((L,3), np.nan, dtype=np.float32)
-        if row.empty:
+        if row is None or row.empty:
             return coords
         for _, r in row.iterrows():
             resid = int(r['resid'])
@@ -173,24 +224,6 @@ class RNADataset(Dataset):
             std  = coords[valid].std(axis=0, keepdims=True) + 1e-6
             coords[valid] = (coords[valid] - mean) / std
 
-        return coords
-
-    def detect_outliers(self,coords, max_jump=20.0):
-        """Purpose: Mask coordinate jumps that are likely label outliers.
-
-        Input:
-            coords: Coordinate array shaped (L, 3).
-            max_jump: Maximum allowed adjacent-residue jump.
-        Output:
-            Coordinate array with large-jump rows replaced by NaN.
-        """
-        # coords: numpy array (L,3)
-        L = coords.shape[0]
-        for i in range(1, L):
-            if not np.any(np.isnan(coords[i])) and not np.any(np.isnan(coords[i-1])):
-                d = np.linalg.norm(coords[i] - coords[i-1])
-                if d > max_jump:
-                    coords[i] = np.array([np.nan, np.nan, np.nan])
         return coords
 
     def __getitem__(self, idx):
@@ -222,7 +255,6 @@ class RNADataset(Dataset):
 
         # 5. labels (coords)
         labels = self.get_labels(target_id, L)   # (L,3)
-        labels = self.detect_outliers(labels)
         contact_map = self.contact_map(target_id, L)
         return (torch.tensor(feats,dtype=torch.float32), 
                 torch.tensor(labels,dtype=torch.float32), 
@@ -255,42 +287,42 @@ class RNADataset(Dataset):
         feat_list = []
         label_list = []
         contact_list = []
-        mask_list = []
+        seq_mask_list = []
         id_list = []
         
         for feat, label, contact_map, L, target_id in batch:
             pad_f = F.pad(feat, (0,0,0,max_L-feat.shape[0]))
             pad_l = F.pad(label, (0,0,0,max_L-label.shape[0]))
             pad_c = F.pad(contact_map, (0,max_L-contact_map.shape[1],0,max_L-contact_map.shape[0]))
-            mask = torch.zeros(max_L)
-            mask[:L] = 1
+            seq_mask = torch.zeros(max_L)
+            seq_mask[:L] = 1
 
             feat_list.append(pad_f)
             label_list.append(pad_l)
             contact_list.append(pad_c)
-            mask_list.append(mask)
+            seq_mask_list.append(seq_mask)
             id_list.append(target_id)
 
 
         feats = torch.stack(feat_list)       # (B, L, 8)
         labels = torch.stack(label_list)     # (B, L, 3)
         contact_maps = torch.stack(contact_list) # (B, L, L)
-        mask = torch.stack(mask_list)        # (B, L)
+        seq_mask = torch.stack(seq_mask_list)        # (B, L)
 
-        coord_mask = ~torch.isnan(labels).any(dim=-1)  # (B, L)
-        final_mask = mask * coord_mask.float()  # (B, L)
+        coord_mask = (~torch.isnan(labels).any(dim=-1)).float() * seq_mask  # (B, L)
         labels = torch.nan_to_num(labels, nan=0.0)
         # transpose for Conv1D:
         feats = feats.permute(0,2,1)         # (B, C, L)
 
-        return feats, labels, contact_maps, final_mask, lengths, id_list
+        return feats, labels, contact_maps, seq_mask, coord_mask, lengths, id_list
 
     
     
 # feats:      (B, 8, L)   # input to model
 # labels:     (B, L, 3)   # target coordinates
 # contact_maps: (B, L, L) # SPOT-RNA-2D contact probabilities
-# final_mask: (B, L)      # 1 = valid, 0 = ignore
+# seq_mask:   (B, L)      # 1 = real residue, 0 = padding
+# coord_mask: (B, L)      # 1 = valid coordinate label, 0 = ignore in loss/metric
 # lengths:    list[int]
 # ids:        list[str]
 
