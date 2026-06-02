@@ -1,0 +1,50 @@
+run:
+  mode: train
+  output_root: output
+  output_dir: auto
+
+data:
+  data_dir: dataset_final
+  msa_dir: dataset_final/MSA
+  val_labels_path: validation_labels_new.normalized.csv
+  contact_map_dir: dataset_final/spot_maps
+  min_train_valid_labels: 3
+  min_train_label_coverage: 0.8
+
+training:
+  epochs: 65
+  batch_size: 64
+  lr: 0.0003
+  patience: 8
+  max_len: 256
+  weight_decay: 0.0001
+
+model:
+  spot_bias_scale: 1.25
+  use_graph: true
+  graph_layers: 2
+  graph_scale: 0.10
+  spot_edge_threshold: 0.50
+  spot_top_k: 8
+  local_edge_max_sep: 4
+  coord_refine_steps: 0
+
+losses:
+  raw_loss_weight: 0.00
+  aligned_loss_weight: 1.0
+  bond_loss_weight: 0.00
+  spot_loss_weight: 0.05
+  distmap_loss_weight: 0.20
+  adj_loss_weight: 0.00
+  short_range_loss_weight: 0.05
+  medium_range_loss_weight: 0.05
+  curvature_loss_weight: 0.00
+  spread_loss_weight: 0.02
+  bond_lower: 0.30
+  bond_upper: 1.20
+  short_range_max_sep: 4
+  medium_range_min_sep: 5
+  medium_range_max_sep: 12
+
+metrics:
+  accuracy_thresholds: [0.5, 0.75, 1.0]
